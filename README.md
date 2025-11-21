@@ -115,7 +115,7 @@ uvicorn main:app --host 0.0.0.0 --port 8001 --reload
 ### 6. Open API docs
 
 - Local: http://localhost:8001/docs
-- On VM: http://&lt;VM_EXTERNAL_IP&gt;:8001/docs
+- On VM: http://34.138.252.36:8001/docs
 
 
 ## 📌 Endpoints
