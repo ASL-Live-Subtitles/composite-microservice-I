@@ -18,7 +18,6 @@ The composite service exposes a **single high-level API**:
 > 
 > Output: generated sentence + sentiment result
 
----
 
 ## 🧱 Architecture Overview
 
@@ -41,8 +40,6 @@ ASL Composite Service
 Composite response: { glosses, letters, context, sentence, sentiment }
 ```
 
----
-
 ## 📂 Project Structure
 
 ```bash
@@ -59,8 +56,6 @@ asl-composite-service/
     ├── asl_agent_client.py  # HTTP client for ASL Agent
     └── sentiment_client.py  # HTTP client for Sentiment microservice
 ```
-
----
 
 ## ⚙️ Setup & Run
 
@@ -122,7 +117,6 @@ uvicorn main:app --host 0.0.0.0 --port 8001 --reload
 - Local: http://localhost:8001/docs
 - On VM: http://&lt;VM_EXTERNAL_IP&gt;:8001/docs
 
----
 
 ## 📌 Endpoints
 
@@ -319,8 +313,6 @@ class PipelineResult(BaseModel):
 }
 ```
 
----
-
 ## 🌐 Endpoint Details
 
 ### 🔹 POST /asl-pipeline
@@ -355,6 +347,9 @@ Run the full ASL → sentence → sentiment pipeline synchronously.
   }
 }
 ```
+
+## Testing the API
+![](/images/test_result.png)
 
 ---
 
