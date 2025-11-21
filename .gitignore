@@ -1,0 +1,70 @@
+# ----------------------------
+# Python
+# ----------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pdb
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+*.log
+*.pot
+*.pyc
+
+# ----------------------------
+# Virtual environment
+# ----------------------------
+venv/
+env/
+ENV/
+.venv/
+.ENV/
+
+# ----------------------------
+# IDE / Editor
+# ----------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ----------------------------
+# OS / System
+# ----------------------------
+.DS_Store
+Thumbs.db
+
+# ----------------------------
+# Uvicorn / FastAPI cache
+# ----------------------------
+*.db
+*.sqlite3
+*.sqlite
+*.pid
+*.lock
+
+# ----------------------------
+# Test & coverage
+# ----------------------------
+.coverage
+htmlcov/
+.tox/
+.nox/
+pytest_cache/
+
+# ----------------------------
+# Jupyter / notebooks
+# ----------------------------
+.ipynb_checkpoints/
+*.ipynb
+
+# ----------------------------
+# Misc
+# ----------------------------
+.env
+.env.*
+logs/
