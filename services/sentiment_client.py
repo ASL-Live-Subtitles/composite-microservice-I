@@ -40,5 +40,4 @@ class SentimentClient:
             resp.raise_for_status()
             data = resp.json()
 
-        # 這裡直接用 Pydantic 幫我們驗證與轉型
         return SentimentResponse(**data)
