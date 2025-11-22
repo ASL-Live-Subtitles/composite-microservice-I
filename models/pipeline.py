@@ -3,9 +3,18 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import List, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
+import hashlib
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+
+def compute_sentence_key(text: str) -> str:
+    """
+    Deterministic key for a sentence, used to enforce logical foreign-key style
+    linkage between ASL Agent output and Sentiment results.
+    """
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 # -----------------------------
@@ -90,6 +99,25 @@ class SentimentResponse(BaseModel):
     )
 
 
+class PipelineLinkage(BaseModel):
+    """
+    Logical foreign-key style linkage that ties together the composite pipeline
+    instance and the downstream sentiment record.
+    """
+    pipeline_id: UUID = Field(
+        default_factory=uuid4,
+        description="Composite pipeline identifier.",
+    )
+    sentence_key: str = Field(
+        ...,
+        description="Deterministic key for the sentence returned by ASL Agent.",
+    )
+    sentiment_id: UUID = Field(
+        ...,
+        description="Foreign-key style reference to the sentiment record id.",
+    )
+
+
 # -----------------------------
 # Composite pipeline models
 # -----------------------------
@@ -125,12 +153,34 @@ class PipelineResult(BaseModel):
     - original glosses + letters
     - the composed sentence from ASL Agent
     - the sentiment analysis result from the sentiment microservice
+    - linkage metadata to enforce logical FK constraints between services
     """
     glosses: List[str]
     letters: List[str]
     context: Optional[str]
     sentence: str
     sentiment: SentimentResponse
+    linkage: PipelineLinkage
+
+    @staticmethod
+    def _expected_key(sentence: str) -> str:
+        return compute_sentence_key(sentence)
+
+    @classmethod
+    def _validate_linkage(cls, sentence: str, sentiment: SentimentResponse, linkage: PipelineLinkage) -> None:
+        expected_key = cls._expected_key(sentence)
+        sentiment_key = compute_sentence_key(sentiment.text)
+        if sentiment_key != expected_key:
+            raise ValueError("Sentiment record text does not match sentence produced by ASL Agent.")
+        if linkage.sentence_key != expected_key:
+            raise ValueError("Linkage sentence_key does not match the composed sentence.")
+        if linkage.sentiment_id != sentiment.id:
+            raise ValueError("Linkage sentiment_id must reference the sentiment record id.")
+
+    @model_validator(mode="after")
+    def _enforce_foreign_keys(self):
+        self._validate_linkage(self.sentence, self.sentiment, self.linkage)
+        return self
 
     model_config = {
         "json_schema_extra": {
@@ -146,6 +196,16 @@ class PipelineResult(BaseModel):
                     "confidence": 0.93,
                     "analyzed_at": "2025-11-15T22:05:00",
                 },
+                "linkage": {
+                    "pipeline_id": "bb80a9bc-8a32-4d24-9dbc-9086f545af8e",
+                    "sentence_key": "2f40239f9c7ef8adc95fb4cf055f20f45ac1c4d3b8599b65a1f70ce773b2764d",
+                    "sentiment_id": "550e8400-e29b-41d4-a716-446655440000",
+                },
             }
         }
     }
+
+
+class PipelineBatchInput(BaseModel):
+    """Batch wrapper for running multiple pipeline inputs."""
+    items: List[PipelineInput]

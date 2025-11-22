@@ -62,8 +62,8 @@ asl-composite-service/
 ### 1. Clone & enter project
 
 ```bash
-git clone https://github.com/<your-username>/asl-composite-service.git
-cd asl-composite-service
+git clone https://github.com/ASL-Live-Subtitles/composite-microservice-I.git
+cd composite-microservice-I
 ```
 
 ### 2. Create & activate virtualenv
@@ -71,9 +71,6 @@ cd asl-composite-service
 ```bash
 python3 -m venv venv
 source venv/bin/activate      # macOS / Linux
-
-# On Windows:
-# venv\Scripts\activate
 ```
 
 ### 3. Install dependencies
@@ -84,12 +81,7 @@ pip install -r requirements.txt
 
 ### 4. Configure environment variables
 
-Copy `.env.example` to `.env`:
-
-```bash
-cp .env.example .env
-```
-
+Create `.env`and add following content
 **.env.example content:**
 
 ```env
@@ -98,8 +90,8 @@ ASL_AGENT_BASE_URL=https://asl-agent-746433182504.us-central1.run.app
 ASL_AGENT_SENTENCE_PATH=/compose/sentence
 
 # OpenAI config passed through to ASL Agent (if required)
-ASL_OPENAI_MODEL=gpt-4o-mini
-ASL_OPENAI_API_KEY=
+OPENAI_MODEL=gpt-4o-mini
+OPENAI_API_KEY=[REPLACE WITH YOUR KEY]
 
 # Sentiment microservice endpoint
 SENTIMENT_BASE_URL=http://34.138.252.36:8000

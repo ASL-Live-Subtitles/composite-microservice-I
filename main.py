@@ -4,23 +4,39 @@ from __future__ import annotations
 import os
 
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, List
+import asyncio
+import concurrent.futures
+from uuid import uuid4
 
+import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, status
-from fastapi.responses import JSONResponse
 
 from models.pipeline import (
     PipelineInput,
     PipelineResult,
     AslAgentRequest,
     SentimentRequest,
+    SentimentResponse,
+    PipelineLinkage,
+    compute_sentence_key,
+    PipelineBatchInput,
 )
 from services.asl_agent_client import AslAgentClient
 from services.sentiment_client import SentimentClient
 
-# Load .env if present
-load_dotenv()
+# Load .env if present; allow local .env to override any pre-set env vars so the correct
+# OpenAI key and service endpoints are used when running locally.
+load_dotenv(override=True)
+
+ASL_AGENT_BASE_URL = os.environ.get(
+    "ASL_AGENT_BASE_URL",
+    "https://asl-agent-746433182504.us-central1.run.app",
+)
+ASL_AGENT_SENTENCE_PATH = os.environ.get("ASL_AGENT_SENTENCE_PATH", "/compose/sentence")
+SENTIMENT_BASE_URL = os.environ.get("SENTIMENT_BASE_URL", "http://34.138.252.36:8000")
+SENTIMENT_SENTIMENTS_PATH = os.environ.get("SENTIMENT_SENTIMENTS_PATH", "/sentiments")
 
 
 app = FastAPI(
@@ -40,6 +56,51 @@ def root() -> Dict[str, Any]:
         "message": "ASL Composite Microservice is running. See /docs for OpenAPI UI.",
         "timestamp": datetime.utcnow().isoformat(),
     }
+
+
+def run_pipeline_sync(payload: PipelineInput) -> PipelineResult:
+    """
+    Synchronous pipeline runner used by the threaded batch endpoint.
+    Uses blocking httpx.Client inside a thread to satisfy the explicit
+    requirement for thread-based parallel execution.
+    """
+    asl_url = f"{ASL_AGENT_BASE_URL.rstrip('/')}{ASL_AGENT_SENTENCE_PATH}"
+    sent_url = f"{SENTIMENT_BASE_URL.rstrip('/')}{SENTIMENT_SENTIMENTS_PATH}"
+
+    asl_payload = {
+        "glosses": payload.glosses,
+        "letters": payload.letters,
+        "context": payload.context,
+        "openai_api_key": os.environ.get("OPENAI_API_KEY", ""),
+        "openai_model": os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
+    }
+
+    with httpx.Client(timeout=30.0) as client:
+        asl_resp = client.post(asl_url, json=asl_payload)
+        asl_resp.raise_for_status()
+        asl_data = asl_resp.json()
+
+        sent_req = {"text": asl_data["text"]}
+        sent_resp = client.post(sent_url, json=sent_req)
+        sent_resp.raise_for_status()
+        sent_data = sent_resp.json()
+
+    sentiment = SentimentResponse(**sent_data)
+    sentence_key = compute_sentence_key(asl_data["text"])
+    linkage = PipelineLinkage(
+        pipeline_id=uuid4(),
+        sentence_key=sentence_key,
+        sentiment_id=sentiment.id,
+    )
+
+    return PipelineResult(
+        glosses=payload.glosses,
+        letters=payload.letters,
+        context=payload.context,
+        sentence=asl_data["text"],
+        sentiment=sentiment,
+        linkage=linkage,
+    )
 
 
 @app.post(
@@ -72,6 +133,13 @@ async def run_asl_pipeline(payload: PipelineInput) -> PipelineResult:
         sent_req = SentimentRequest(text=asl_resp.text)
         sent_resp = await sentiment_client.analyze(sent_req)
 
+        sentence_key = compute_sentence_key(asl_resp.text)
+        linkage = PipelineLinkage(
+            pipeline_id=uuid4(),
+            sentence_key=sentence_key,
+            sentiment_id=sent_resp.id,
+        )
+
         # 3) Combine into PipelineResult
         result = PipelineResult(
             glosses=payload.glosses,
@@ -79,14 +147,54 @@ async def run_asl_pipeline(payload: PipelineInput) -> PipelineResult:
             context=payload.context,
             sentence=asl_resp.text,
             sentiment=sent_resp,
+            linkage=linkage,
         )
         return result
+
+    except httpx.HTTPStatusError as e:
+        # Propagate upstream HTTP errors with their original status code
+        raise HTTPException(
+            status_code=e.response.status_code,
+            detail=f"Upstream service error calling {e.request.url}: {e.response.text}",
+        ) from e
+
+    except httpx.RequestError as e:
+        # Network/transport issues reaching upstream services
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Upstream connection error calling {e.request.url}: {e!s}",
+        ) from e
 
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Pipeline error: {e}",
-        )
+        ) from e
+
+
+@app.post(
+    "/asl-pipeline/batch",
+    response_model=List[PipelineResult],
+    status_code=status.HTTP_201_CREATED,
+    tags=["pipeline"],
+)
+async def run_asl_pipeline_batch(batch: PipelineBatchInput) -> List[PipelineResult]:
+    """
+    Batch pipeline endpoint that processes multiple payloads in parallel using
+    a thread pool.
+    """
+    if not batch.items:
+        return []
+
+    loop = asyncio.get_running_loop()
+    max_workers = min(3, max(1, len(batch.items)))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        tasks = [
+            loop.run_in_executor(executor, run_pipeline_sync, item)
+            for item in batch.items
+        ]
+        results = await asyncio.gather(*tasks)
+    return results
 
 
 # Entrypoint for `python main.py`
