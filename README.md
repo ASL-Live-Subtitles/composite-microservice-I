@@ -119,6 +119,10 @@ Run the complete pipeline:
 1. glosses + letters + context → ASL Agent → sentence
 2. sentence → Sentiment Microservice → sentiment result
 
+### ⚡️ POST /asl-pipeline/batch
+
+Execute asl-pipeline concurrently for multiple payloads using thread-level parallelism via `ThreadPoolExecutor`.  
+
 ---
 
 ## 🧾 Data Models
@@ -285,6 +289,7 @@ class PipelineResult(BaseModel):
     context: Optional[str]
     sentence: str
     sentiment: SentimentResponse
+    linkage: PipelineLinkage
 ```
 
 **Example:**
@@ -301,9 +306,16 @@ class PipelineResult(BaseModel):
     "sentiment": "positive",
     "confidence": 0.93,
     "analyzed_at": "2025-11-15T22:05:00"
+  },
+  "linkage": {
+    "pipeline_id": "bb80a9bc-8a32-4d24-9dbc-9086f545af8e",
+    "sentence_key": "2f40239f9c7ef8adc95fb4cf055f20f45ac1c4d3b8599b65a1f70ce773b2764d",
+    "sentiment_id": "550e8400-e29b-41d4-a716-446655440000"
   }
 }
 ```
+
+The composite service applies a foreign-key style constraint by hashing the ASL Agent sentence into `sentence_key` and validating it against both the sentiment text and `linkage.sentiment_id` output. This validates the sentiment row match with the generated sentence.
 
 ## 🌐 Endpoint Details
 
