@@ -12,6 +12,7 @@ from uuid import uuid4
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
 
 from models.pipeline import (
     PipelineInput,
@@ -48,6 +49,23 @@ app = FastAPI(
     version="0.1.0",
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:4173",
+        "http://localhost:5173",
+        "https://storage.googleapis.com",
+        "https://storage.googleapis.com/signtalk",
+    ],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    max_age=3600,
+)
+
+@app.options("/{rest_of_path:path}")
+async def preflight_handler(rest_of_path: str):
+    return {"message": "ok"}
 
 @app.get("/", tags=["root"])
 def root() -> Dict[str, Any]:
