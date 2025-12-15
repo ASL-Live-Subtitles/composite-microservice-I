@@ -81,19 +81,23 @@ pip install -r requirements.txt
 
 ### 4. Configure environment variables
 
-Create `.env`and add following content
+Create `.env`and add following content  
 **.env.example content:**
 
 ```env
-# ASL Agent Cloud Run endpoint
-ASL_AGENT_BASE_URL=https://asl-agent-746433182504.us-central1.run.app
-ASL_AGENT_SENTENCE_PATH=/compose/sentence
+# Model-serving endpoint (video -> gloss)
+MODEL_SERVING_BASE_URL=http://localhost:9002
+MODEL_SERVING_VIDEO_GLOSS_PATH=/video-gloss
 
 # OpenAI config passed through to ASL Agent (if required)
 OPENAI_MODEL=gpt-4o-mini
 OPENAI_API_KEY=[REPLACE WITH YOUR KEY]
 
-# Sentiment microservice endpoint
+# ASL Agent Cloud Run endpoint (gloss -> sentence)
+ASL_AGENT_BASE_URL=https://asl-agent-746433182504.us-central1.run.app
+ASL_AGENT_SENTENCE_PATH=/compose/sentence
+
+# Sentiment microservice endpoint (sentence -> sentiment)
 SENTIMENT_BASE_URL=http://34.138.252.36:8000
 SENTIMENT_SENTIMENTS_PATH=/sentiments
 ```

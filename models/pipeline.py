@@ -18,6 +18,45 @@ def compute_sentence_key(text: str) -> str:
 
 
 # -----------------------------
+# Model Serving (video -> gloss) models
+# -----------------------------
+class VideoGlossRequest(BaseModel):
+    """Payload sent to the model-serving microservice for gloss extraction."""
+
+    video_url: Optional[str] = Field(
+        default=None,
+        description="URL of the uploaded video to transcribe into glosses.",
+        json_schema_extra={"example": "https://storage.googleapis.com/bucket/sample.mp4"},
+    )
+    video_b64: Optional[str] = Field(
+        default=None,
+        description="Base64-encoded video payload when a URL is not available.",
+        json_schema_extra={"example": "<base64-encoded-bytes>"},
+    )
+
+    @model_validator(mode="after")
+    def _require_source(self):
+        if not self.video_url and not self.video_b64:
+            raise ValueError("Provide either video_url or video_b64 for gloss extraction.")
+        return self
+
+
+class VideoGlossResponse(BaseModel):
+    """Gloss output returned by the model-serving microservice."""
+
+    glosses: List[str] = Field(
+        ...,
+        description="Detected ASL gloss tokens from the video.",
+        json_schema_extra={"example": ["IX-1", "GOOD", "IDEA"]},
+    )
+    letters: List[str] = Field(
+        default_factory=list,
+        description="Optional fingerspelling letters detected from the video.",
+        json_schema_extra={"example": ["A", "I"]},
+    )
+
+
+# -----------------------------
 # ASL Agent models
 # -----------------------------
 class AslAgentRequest(BaseModel):
@@ -125,11 +164,12 @@ class PipelineInput(BaseModel):
     """
     Top-level input to the composite microservice.
 
-    For now we assume glosses + letters are already available
-    (image → glosses is handled by another atomic microservice).
+    Accepts either:
+    - pre-computed glosses/letters, OR
+    - a video reference (URL or base64) to run through the model-serving service.
     """
     glosses: List[str] = Field(
-        ...,
+        default_factory=list,
         description="ASL gloss sequence generated from gesture recognition.",
         json_schema_extra={"example": ["IX-1", "GOOD", "IDEA"]},
     )
@@ -138,11 +178,29 @@ class PipelineInput(BaseModel):
         description="Optional fingerspelling letters.",
         json_schema_extra={"example": ["A", "I"]},
     )
+    video_url: Optional[str] = Field(
+        default=None,
+        description="URL to a video to be converted to glosses via model serving.",
+        json_schema_extra={"example": "https://storage.googleapis.com/bucket/sample.mp4"},
+    )
+    video_b64: Optional[str] = Field(
+        default=None,
+        description="Base64-encoded video payload when URL is unavailable.",
+        json_schema_extra={"example": "<base64-encoded-bytes>"},
+    )
     context: Optional[str] = Field(
         default=None,
         description="Optional context to help ASL Agent generate better sentences.",
         json_schema_extra={"example": "Brainstorming a new sprint plan."},
     )
+
+    @model_validator(mode="after")
+    def _require_gloss_source(self):
+        has_glosses = bool(self.glosses)
+        has_video = bool(self.video_url or self.video_b64)
+        if not has_glosses and not has_video:
+            raise ValueError("Provide glosses or a video (video_url or video_b64) to run the pipeline.")
+        return self
 
 
 class PipelineResult(BaseModel):

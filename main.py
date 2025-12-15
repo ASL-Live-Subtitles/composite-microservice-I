@@ -23,14 +23,21 @@ from models.pipeline import (
     PipelineLinkage,
     compute_sentence_key,
     PipelineBatchInput,
+    VideoGlossRequest,
 )
 from services.asl_agent_client import AslAgentClient
 from services.sentiment_client import SentimentClient
+from services.model_serving_client import ModelServingClient
 
 # Load .env if present; allow local .env to override any pre-set env vars so the correct
 # OpenAI key and service endpoints are used when running locally.
 load_dotenv(override=True)
 
+MODEL_SERVING_BASE_URL = os.environ.get(
+    "MODEL_SERVING_BASE_URL",
+    "http://localhost:9002",
+)
+MODEL_SERVING_VIDEO_GLOSS_PATH = os.environ.get("MODEL_SERVING_VIDEO_GLOSS_PATH", "/video-gloss")
 ASL_AGENT_BASE_URL = os.environ.get(
     "ASL_AGENT_BASE_URL",
     "https://asl-agent-746433182504.us-central1.run.app",
@@ -82,18 +89,36 @@ def run_pipeline_sync(payload: PipelineInput) -> PipelineResult:
     Uses blocking httpx.Client inside a thread to satisfy the explicit
     requirement for thread-based parallel execution.
     """
+    gloss_url = f"{MODEL_SERVING_BASE_URL.rstrip('/')}{MODEL_SERVING_VIDEO_GLOSS_PATH}"
     asl_url = f"{ASL_AGENT_BASE_URL.rstrip('/')}{ASL_AGENT_SENTENCE_PATH}"
     sent_url = f"{SENTIMENT_BASE_URL.rstrip('/')}{SENTIMENT_SENTIMENTS_PATH}"
 
-    asl_payload = {
-        "glosses": payload.glosses,
-        "letters": payload.letters,
-        "context": payload.context,
-        "openai_api_key": os.environ.get("OPENAI_API_KEY", ""),
-        "openai_model": os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
-    }
-
     with httpx.Client(timeout=30.0) as client:
+        glosses = payload.glosses
+        letters = payload.letters
+
+        if not glosses:
+            video_req = {"video_url": payload.video_url, "video_b64": payload.video_b64}
+            gloss_resp = client.post(gloss_url, json=video_req)
+            gloss_resp.raise_for_status()
+            gloss_data = gloss_resp.json()
+            glosses = gloss_data.get("glosses", [])
+            letters = gloss_data.get("letters", [])
+
+            if not glosses:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Model-serving service returned no glosses for the provided video.",
+                )
+
+        asl_payload = {
+            "glosses": glosses,
+            "letters": letters,
+            "context": payload.context,
+            "openai_api_key": os.environ.get("OPENAI_API_KEY", ""),
+            "openai_model": os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
+        }
+
         asl_resp = client.post(asl_url, json=asl_payload)
         asl_resp.raise_for_status()
         asl_data = asl_resp.json()
@@ -137,17 +162,33 @@ async def run_asl_pipeline(payload: PipelineInput) -> PipelineResult:
     """
     asl_client = AslAgentClient()
     sentiment_client = SentimentClient()
+    model_serving_client = ModelServingClient()
 
     try:
-        # 1) Call ASL Agent
-        asl_req = AslAgentRequest(
-            glosses=payload.glosses,
-            letters=payload.letters,
-            context=payload.context,
-        )
+        glosses = payload.glosses
+        letters = payload.letters
+
+        # 1) Call model-serving for video -> gloss if glosses are not supplied
+        if not glosses:
+            video_req = VideoGlossRequest(
+                video_url=payload.video_url,
+                video_b64=payload.video_b64,
+            )
+            gloss_resp = await model_serving_client.video_to_gloss(video_req)
+            glosses = gloss_resp.glosses
+            letters = gloss_resp.letters
+
+            if not glosses:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Model-serving service returned no glosses for the provided video.",
+                )
+
+        # 2) Call ASL Agent
+        asl_req = AslAgentRequest(glosses=glosses, letters=letters, context=payload.context)
         asl_resp = await asl_client.compose_sentence(asl_req)
 
-        # 2) Call Sentiment microservice
+        # 3) Call Sentiment microservice
         sent_req = SentimentRequest(text=asl_resp.text)
         sent_resp = await sentiment_client.analyze(sent_req)
 
@@ -158,10 +199,10 @@ async def run_asl_pipeline(payload: PipelineInput) -> PipelineResult:
             sentiment_id=sent_resp.id,
         )
 
-        # 3) Combine into PipelineResult
+        # 4) Combine into PipelineResult
         result = PipelineResult(
-            glosses=payload.glosses,
-            letters=payload.letters,
+            glosses=glosses,
+            letters=letters,
             context=payload.context,
             sentence=asl_resp.text,
             sentiment=sent_resp,
