@@ -11,8 +11,10 @@ from uuid import uuid4
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, status, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from models.pipeline import (
     PipelineInput,
@@ -28,6 +30,13 @@ from models.pipeline import (
 from services.asl_agent_client import AslAgentClient
 from services.sentiment_client import SentimentClient
 from services.model_serving_client import ModelServingClient
+
+from auth.oauth import oauth_login, oauth_callback, get_roles
+from auth.dependencies import require_user, require_roles
+from auth.jwt import create_jwt
+from starlette.requests import Request
+from starlette.middleware.sessions import SessionMiddleware
+
 
 # Load .env if present; allow local .env to override any pre-set env vars so the correct
 # OpenAI key and service endpoints are used when running locally.
@@ -45,7 +54,7 @@ ASL_AGENT_BASE_URL = os.environ.get(
 ASL_AGENT_SENTENCE_PATH = os.environ.get("ASL_AGENT_SENTENCE_PATH", "/compose/sentence")
 SENTIMENT_BASE_URL = os.environ.get("SENTIMENT_BASE_URL", "http://34.138.252.36:8000")
 SENTIMENT_SENTIMENTS_PATH = os.environ.get("SENTIMENT_SENTIMENTS_PATH", "/sentiments")
-
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://storage.googleapis.com/signtalk/index.html")
 
 app = FastAPI(
     title="ASL Composite Microservice",
@@ -57,6 +66,13 @@ app = FastAPI(
 )
 
 app.add_middleware(
+    SessionMiddleware,
+    secret_key=os.environ["SESSION_SECRET"],
+    https_only=True,
+    same_site="lax",
+)
+
+app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:4173",
@@ -64,7 +80,7 @@ app.add_middleware(
         "https://storage.googleapis.com",
         "https://storage.googleapis.com/signtalk",
     ],
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
     max_age=3600,
@@ -74,6 +90,34 @@ app.add_middleware(
 async def preflight_handler(rest_of_path: str):
     return {"message": "ok"}
 
+
+# Auth endpoints
+@app.get("/login", tags=["auth"])
+async def login(request: Request):
+    return await oauth_login(request)
+
+@app.get("/auth/callback", tags=["auth"])
+async def auth_callback(request: Request):
+    userinfo = await oauth_callback(request)
+    roles = get_roles(userinfo)
+    jwt_token = create_jwt(userinfo, roles)
+    return RedirectResponse(f"{FRONTEND_URL}?token={jwt_token}")
+
+@app.get("/logout", tags=["auth"])
+def logout():
+    return RedirectResponse(f"{FRONTEND_URL}?logout=1")
+
+@app.get("/users", tags=["auth"])
+def get_current_user(user: Dict[str, Any] = Depends(require_user)):
+    return {
+        "user": {
+            "sub": user.get("sub"),
+            "email": user.get("email"),
+            "name": user.get("name"),
+            "roles": user.get("roles", []),
+        }
+    }
+
 @app.get("/", tags=["root"])
 def root() -> Dict[str, Any]:
     """Simple health/root endpoint."""
@@ -81,7 +125,6 @@ def root() -> Dict[str, Any]:
         "message": "ASL Composite Microservice is running. See /docs for OpenAPI UI.",
         "timestamp": datetime.utcnow().isoformat(),
     }
-
 
 def run_pipeline_sync(payload: PipelineInput) -> PipelineResult:
     """
@@ -151,6 +194,7 @@ def run_pipeline_sync(payload: PipelineInput) -> PipelineResult:
     response_model=PipelineResult,
     status_code=status.HTTP_201_CREATED,
     tags=["pipeline"],
+    dependencies=[Depends(require_user)],
 )
 async def run_asl_pipeline(payload: PipelineInput) -> PipelineResult:
     """
@@ -236,6 +280,7 @@ async def run_asl_pipeline(payload: PipelineInput) -> PipelineResult:
     response_model=List[PipelineResult],
     status_code=status.HTTP_201_CREATED,
     tags=["pipeline"],
+    dependencies=[Depends(require_roles("admin"))],
 )
 async def run_asl_pipeline_batch(batch: PipelineBatchInput) -> List[PipelineResult]:
     """
@@ -260,5 +305,5 @@ async def run_asl_pipeline_batch(batch: PipelineBatchInput) -> List[PipelineResu
 if __name__ == "__main__":
     import uvicorn
 
-    port = int(os.environ.get("PORT", 8001))
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
