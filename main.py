@@ -37,6 +37,7 @@ from auth.jwt import create_jwt
 from starlette.requests import Request
 from starlette.middleware.sessions import SessionMiddleware
 
+from pub_sub.publisher import publish_event
 
 # Load .env if present; allow local .env to override any pre-set env vars so the correct
 # OpenAI key and service endpoints are used when running locally.
@@ -196,7 +197,9 @@ def run_pipeline_sync(payload: PipelineInput) -> PipelineResult:
     tags=["pipeline"],
     dependencies=[Depends(require_user)],
 )
-async def run_asl_pipeline(payload: PipelineInput) -> PipelineResult:
+async def run_asl_pipeline(
+    payload: PipelineInput,
+    user: Dict[str, Any] = Depends(require_user)) -> PipelineResult:
     """
     Synchronous composite endpoint:
 
@@ -252,6 +255,10 @@ async def run_asl_pipeline(payload: PipelineInput) -> PipelineResult:
             sentiment=sent_resp,
             linkage=linkage,
         )
+
+        # 5) Publish event to Pub/Sub
+        publish_event(result, source_api="/asl-pipeline", recipient_email=user.get("email"))
+
         return result
 
     except httpx.HTTPStatusError as e:
@@ -282,7 +289,9 @@ async def run_asl_pipeline(payload: PipelineInput) -> PipelineResult:
     tags=["pipeline"],
     dependencies=[Depends(require_roles("admin"))],
 )
-async def run_asl_pipeline_batch(batch: PipelineBatchInput) -> List[PipelineResult]:
+async def run_asl_pipeline_batch(
+    batch: PipelineBatchInput,
+    user: Dict[str, Any] = Depends(require_user)) -> List[PipelineResult]:
     """
     Batch pipeline endpoint that processes multiple payloads in parallel using
     a thread pool.
@@ -298,6 +307,9 @@ async def run_asl_pipeline_batch(batch: PipelineBatchInput) -> List[PipelineResu
             for item in batch.items
         ]
         results = await asyncio.gather(*tasks)
+
+    publish_event(results, source_api="/asl-pipeline", recipient_email=user.get("email"))
+
     return results
 
 
