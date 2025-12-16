@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 import os
+from dotenv import load_dotenv
+
+# Load .env FIRST before any other imports that might use os.environ
+load_dotenv(override=True)
 
 from datetime import datetime
 from typing import Dict, Any, List
@@ -10,7 +14,6 @@ import concurrent.futures
 from uuid import uuid4
 
 import httpx
-from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, status, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
@@ -38,10 +41,6 @@ from starlette.requests import Request
 from starlette.middleware.sessions import SessionMiddleware
 
 from pub_sub.publisher import publish_event
-
-# Load .env if present; allow local .env to override any pre-set env vars so the correct
-# OpenAI key and service endpoints are used when running locally.
-load_dotenv(override=True)
 
 MODEL_SERVING_BASE_URL = os.environ.get(
     "MODEL_SERVING_BASE_URL",
@@ -78,6 +77,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:4173",
         "http://localhost:5173",
+        "http://localhost:3000",
         "https://storage.googleapis.com",
         "https://storage.googleapis.com/signtalk",
     ],

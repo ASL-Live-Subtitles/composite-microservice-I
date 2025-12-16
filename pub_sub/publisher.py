@@ -4,25 +4,36 @@ from typing import Union, List, Optional
 from models.pipeline import PipelineResult
 from datetime import datetime
 import os
+import google.auth.exceptions
 
 PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT", "hpml-472522")
 PUBSUB_TOPIC = "asl-session-completed"
 
-publisher = pubsub_v1.PublisherClient()
-topic_path = publisher.topic_path(PROJECT_ID, PUBSUB_TOPIC)
+try:
+    publisher = pubsub_v1.PublisherClient()
+    topic_path = publisher.topic_path(PROJECT_ID, PUBSUB_TOPIC)
+except (google.auth.exceptions.DefaultCredentialsError, Exception) as e:
+    print(f"WARNING: Could not initialize Google Cloud Pub/Sub publisher: {e}")
+    print("Events will NOT be published to Pub/Sub.")
+    publisher = None
+    topic_path = None
 
 def publish_event(
     results: Union[PipelineResult, List[PipelineResult]],
     source_api: str,
     recipient_email: Optional[str] = None,
 ) -> None:
+    if not publisher:
+        print("Skipping publish_event because Pub/Sub publisher is not initialized.")
+        return
+
     if not isinstance(results, list):
         results = [results]
 
     event = {
         "event_type": "ASL_COMPLETED",
         "event_source": source_api,
-        "recipient_email": recipient_email,   # <-- add this
+        "recipient_email": recipient_email,
         "batch_size": len(results),
         "timestamp": datetime.utcnow().isoformat(),
         "items": [
