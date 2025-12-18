@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 load_dotenv(override=True)
 
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, Tuple
 import asyncio
 import concurrent.futures
 from uuid import uuid4
@@ -54,7 +54,7 @@ ASL_AGENT_BASE_URL = os.environ.get(
 ASL_AGENT_SENTENCE_PATH = os.environ.get("ASL_AGENT_SENTENCE_PATH", "/compose/sentence")
 SENTIMENT_BASE_URL = os.environ.get("SENTIMENT_BASE_URL", "http://34.138.252.36:8000")
 SENTIMENT_SENTIMENTS_PATH = os.environ.get("SENTIMENT_SENTIMENTS_PATH", "/sentiments")
-FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://storage.googleapis.com/signtalk/index.html")
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://signtalk2.storage.googleapis.com/index.html")
 
 app = FastAPI(
     title="ASL Composite Microservice",
@@ -80,6 +80,8 @@ app.add_middleware(
         "http://localhost:3000",
         "https://storage.googleapis.com",
         "https://storage.googleapis.com/signtalk",
+        "https://storage.googleapis.com/signtalk2",
+        "https://signtalk2.storage.googleapis.com"
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -90,6 +92,24 @@ app.add_middleware(
 @app.options("/{rest_of_path:path}")
 async def preflight_handler(rest_of_path: str):
     return {"message": "ok"}
+
+def _split_csv_env(value: Optional[str]) -> List[str]:
+    if not value:
+        return []
+    return [part.strip() for part in value.split(",") if part.strip()]
+
+
+def dummy_testor_video_to_gloss() -> Tuple[List[str], List[str]]:
+    """
+    Fallback used when the model-serving (video -> gloss) call fails.
+
+    Can be overridden via env vars:
+      - DUMMY_TESTOR_GLOSSES="IX-1,GOOD,IDEA"
+      - DUMMY_TESTOR_LETTERS="A,I"
+    """
+    glosses = _split_csv_env(os.environ.get("DUMMY_TESTOR_GLOSSES")) or ["IX-1", "GOOD", "IDEA"]
+    letters = _split_csv_env(os.environ.get("DUMMY_TESTOR_LETTERS")) or ["A", "I"]
+    return glosses, letters
 
 
 # Auth endpoints
@@ -143,11 +163,15 @@ def run_pipeline_sync(payload: PipelineInput) -> PipelineResult:
 
         if not glosses:
             video_req = {"video_url": payload.video_url, "video_b64": payload.video_b64}
-            gloss_resp = client.post(gloss_url, json=video_req)
-            gloss_resp.raise_for_status()
-            gloss_data = gloss_resp.json()
-            glosses = gloss_data.get("glosses", [])
-            letters = gloss_data.get("letters", [])
+            try:
+                gloss_resp = client.post(gloss_url, json=video_req)
+                gloss_resp.raise_for_status()
+                gloss_data = gloss_resp.json()
+                glosses = gloss_data.get("glosses", [])
+                letters = gloss_data.get("letters", [])
+            except (httpx.HTTPError, ValueError) as e:
+                print(f"Model-serving video->gloss failed ({e}); falling back to dummy testor.")
+                glosses, letters = dummy_testor_video_to_gloss()
 
             if not glosses:
                 raise HTTPException(
@@ -181,8 +205,8 @@ def run_pipeline_sync(payload: PipelineInput) -> PipelineResult:
     )
 
     return PipelineResult(
-        glosses=payload.glosses,
-        letters=payload.letters,
+        glosses=glosses,
+        letters=letters,
         context=payload.context,
         sentence=asl_data["text"],
         sentiment=sentiment,
@@ -221,9 +245,13 @@ async def run_asl_pipeline(
                 video_url=payload.video_url,
                 video_b64=payload.video_b64,
             )
-            gloss_resp = await model_serving_client.video_to_gloss(video_req)
-            glosses = gloss_resp.glosses
-            letters = gloss_resp.letters
+            try:
+                gloss_resp = await model_serving_client.video_to_gloss(video_req)
+                glosses = gloss_resp.glosses
+                letters = gloss_resp.letters
+            except (httpx.HTTPError, ValueError) as e:
+                print(f"Model-serving video->gloss failed ({e}); falling back to dummy testor.")
+                glosses, letters = dummy_testor_video_to_gloss()
 
             if not glosses:
                 raise HTTPException(
